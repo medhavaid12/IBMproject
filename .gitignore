@@ -1,0 +1,14 @@
+# Ignore Python virtual environments
+.venv/
+venv/
+
+
+# System files
+.DS_Store
+Thumbs.db
+
+# VSCode config (optional)
+.vscode/
+
+# Ignore temporary or log files
+*.log
