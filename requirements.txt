@@ -1,0 +1,13 @@
+
+#run this in cmd or in powershell with virtual environment installed and activated 
+pip install flask==3.0.0
+pip install opencv-python==4.9.0.80
+pip install mediapipe==0.10.9
+pip install ultralytics==8.1.27
+pip install numpy==1.26.4
+pip install pandas==2.2.2
+pip install matplotlib==3.8.4
+pip install python-dotenv==1.0.1
+
+IF ANY ISSUE ARISES THEN PLEASE
+pip install --upgrade pip
