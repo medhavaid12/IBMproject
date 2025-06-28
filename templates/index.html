@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Face Mask Detection</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f0f2f5;
+      margin: 0;
+      padding: 20px;
+      color: #333;
+    }
+    h1 {
+      text-align: center;
+      color: #1c3d5a;
+    }
+    .container {
+      display: flex;
+      justify-content: center;
+      margin-top: 30px;
+    }
+    #video-container {
+      position: relative;
+      width: 660px;
+      height: 500px;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    #video-preview {
+      width: 640px;
+      height: 480px;
+      border-radius: 8px;
+      z-index: 1;
+    }
+    canvas {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 2;
+    }
+    #prompt-block {
+      position: absolute;
+      bottom: 15px;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: rgba(255, 0, 0, 0.95);
+      color: white;
+      font-size: 20px;
+      font-weight: bold;
+      padding: 14px 28px;
+      border-radius: 10px;
+      z-index: 999;
+      display: none;
+      animation: blink 1s infinite;
+    }
+    @keyframes blink {
+      50% {
+        opacity: 0.6;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>Face Mask Detection</h1>
+  <div class="container">
+    <div id="video-container">
+      <video id="video-preview" autoplay muted playsinline></video>
+      <canvas id="overlay-canvas"></canvas>
+      <div id="prompt-block">🚫 FACE NOT DETECTED – PLEASE FACE THE CAMERA</div>
+    </div>
+  </div>
+
+  <script>
+    const video = document.getElementById('video-preview');
+    const overlayCanvas = document.getElementById('overlay-canvas');
+    const overlayCtx = overlayCanvas.getContext('2d');
+    const captureCanvas = document.createElement('canvas');
+    const captureCtx = captureCanvas.getContext('2d');
+    const promptBlock = document.getElementById('prompt-block');
+
+    let lastVoicePromptTime = 0;
+
+    function speakPrompt() {
+      const now = Date.now();
+      if (now - lastVoicePromptTime < 4000) return;
+      const msg = new SpeechSynthesisUtterance("Face not detected. Please face the camera.");
+      window.speechSynthesis.speak(msg);
+      lastVoicePromptTime = now;
+    }
+
+    function deduplicateDetections(detections) {
+      const groups = [];
+
+      detections.forEach(det => {
+        const centerX = det.x + det.width / 2;
+        const centerY = det.y + det.height / 2;
+        let foundGroup = false;
+
+        for (const group of groups) {
+          const g = group[0];
+          const gCenterX = g.x + g.width / 2;
+          const gCenterY = g.y + g.height / 2;
+          const distance = Math.sqrt((centerX - gCenterX) ** 2 + (centerY - gCenterY) ** 2);
+          if (distance < 80) {
+            group.push(det);
+            foundGroup = true;
+            break;
+          }
+        }
+
+        if (!foundGroup) {
+          groups.push([det]);
+        }
+      });
+
+      return groups.map(group =>
+        group.reduce((best, current) => current.confidence > best.confidence ? current : best)
+      );
+    }
+
+    navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+      video.srcObject = stream;
+
+      video.addEventListener('loadeddata', () => {
+        captureCanvas.width = video.videoWidth;
+        captureCanvas.height = video.videoHeight;
+        overlayCanvas.width = video.videoWidth;
+        overlayCanvas.height = video.videoHeight;
+
+        setInterval(() => {
+          captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+          const base64Image = captureCanvas.toDataURL('image/jpeg');
+
+          fetch('/detect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: base64Image })
+          })
+          .then(res => res.json())
+          .then(data => {
+            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+            if (data.no_face) {
+              promptBlock.style.display = 'block';
+              speakPrompt();
+              return;
+            } else {
+              promptBlock.style.display = 'none';
+            }
+
+            const filteredDetections = deduplicateDetections(data.detections);
+            for (const det of filteredDetections) {
+              const { x, y, width, height, label, confidence } = det;
+              const color = label === 'mask' ? 'green' : 'red';
+
+              // Shrink bounding box by 15%
+              const shrinkFactor = 0.15;
+              const dx = width * shrinkFactor / 2;
+              const dy = height * shrinkFactor / 2;
+
+              const newX = x + dx;
+              const newY = y + dy;
+              const newWidth = width * (1 - shrinkFactor);
+              const newHeight = height * (1 - shrinkFactor);
+
+              // Draw thick bounding box
+              overlayCtx.strokeStyle = color;
+              overlayCtx.lineWidth = 8;
+              overlayCtx.strokeRect(newX, newY, newWidth, newHeight);
+
+              // Label background
+              const labelText = `${label.toUpperCase()} (${Math.round(confidence)}%)`;
+              overlayCtx.font = 'bold 22px Arial';
+              const textWidth = overlayCtx.measureText(labelText).width;
+              const textHeight = 24;
+
+              overlayCtx.fillStyle = color;
+              overlayCtx.fillRect(newX, newY - textHeight - 8, textWidth + 10, textHeight + 4);
+
+              // Label text
+              overlayCtx.fillStyle = 'white';
+              overlayCtx.fillText(labelText, newX + 5, newY - 10);
+            }
+          })
+          .catch(err => {
+            promptBlock.style.display = 'block';
+            speakPrompt();
+            console.error('Detection error:', err);
+          });
+        }, 1000);
+      });
+    }).catch(err => {
+      promptBlock.style.display = 'block';
+      speakPrompt();
+      console.error('Camera error:', err);
+    });
+  </script>
+</body>
+</html>
